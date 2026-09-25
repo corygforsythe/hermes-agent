@@ -3739,25 +3739,53 @@ class BasePlatformAdapter(ABC):
             hi = _or_default(lambda: int(os.getenv("HERMES_HUMAN_DELAY_MAX_MS", str(hi))), hi)
         return random.uniform(lo / 1000.0, hi / 1000.0)
 
-    async def _synthesize_auto_tts(self, text_content: str) -> Tuple[List[str], Optional[str]]:
+    def _auto_tts_profile_scope(self, source):
+        """Routed profile's runtime scope for a multiplexed turn, else a no-op context.
+
+        This block runs AFTER the runner's message handler returned, i.e. after that handler's
+        ``_profile_runtime_scope`` exited — so without re-entering it the TTS tool resolves the
+        DEFAULT profile's ``tts`` section and a routed profile's own provider/voice never applies.
+        """
+        runner = self.gateway_runner
+        if source is None or runner is None:
+            return contextlib.nullcontext()
+        if not getattr(getattr(runner, "config", None), "multiplex_profiles", False):
+            return contextlib.nullcontext()
+        resolve = getattr(runner, "_resolve_profile_home_for_source", None)
+        if not callable(resolve):
+            return contextlib.nullcontext()
+        from gateway.run import _async_profile_runtime_scope
+        from hermes_constants import get_hermes_home_override
+        try:
+            profile_home = resolve(source)
+        except Exception:
+            logger.debug("[%s] Auto-TTS profile resolution failed", self.name, exc_info=True)
+            return contextlib.nullcontext()
+        if profile_home is None or get_hermes_home_override() == str(profile_home):
+            return contextlib.nullcontext()
+        return _async_profile_runtime_scope(profile_home)
+
+    async def _synthesize_auto_tts(
+        self, text_content: str, source=None) -> Tuple[List[str], Optional[str]]:
         """Synthesize auto-TTS audio -> ``(existing_paths, requested_path)``; empty/None on failure
         (logged, never raised). Path built platform-aware HERE: HERMES_SESSION_PLATFORM is cleared
-        post-handler."""
+        post-handler; the TTS config is read under the routed profile's scope."""
         paths: List[str] = []
         requested_path = None
         try:
             from tools.tts_tool import text_to_speech_tool, check_tts_requirements
-            if check_tts_requirements():
-                import json as _json
-                speech_text = self.prepare_tts_text(text_content)
-                if not speech_text:
-                    raise ValueError("Empty text after markdown cleanup")
-                requested_path = build_auto_tts_output_path(self.platform)
-                tts_data = _json.loads(await asyncio.to_thread(
-                    text_to_speech_tool, text=speech_text, output_path=requested_path))
-                if tts_data.get("success", True):
-                    raw_tts_paths = tts_data.get("file_paths") or [tts_data.get("file_path")]
-                    paths = [str(path) for path in raw_tts_paths if path and Path(path).exists()]
+            async with self._auto_tts_profile_scope(source):
+                if check_tts_requirements():
+                    import json as _json
+                    speech_text = self.prepare_tts_text(text_content)
+                    if not speech_text:
+                        raise ValueError("Empty text after markdown cleanup")
+                    requested_path = build_auto_tts_output_path(self.platform)
+                    tts_data = _json.loads(await asyncio.to_thread(
+                        text_to_speech_tool, text=speech_text, output_path=requested_path))
+                    if tts_data.get("success", True):
+                        raw_tts_paths = tts_data.get("file_paths") or [tts_data.get("file_path")]
+                        paths = [str(path) for path in raw_tts_paths if path and Path(path).exists()]
         except Exception as tts_err:
             logger.warning("[%s] Auto-TTS failed: %s", self.name, tts_err)
         return paths, requested_path
@@ -4118,7 +4146,8 @@ class BasePlatformAdapter(ABC):
                 _tts_paths, _tts_requested_path = [], None
                 if self._wants_auto_tts(
                         event, session_key, interrupt_event, text_content, media_files):
-                    _tts_paths, _tts_requested_path = await self._synthesize_auto_tts(text_content)
+                    _tts_paths, _tts_requested_path = await self._synthesize_auto_tts(
+                        text_content, event.source)
                 # TTS plays before text; generated files are removed afterwards.
                 _tts_caption_delivered = False
                 for _tts_index, _tts_path in enumerate(_tts_paths):
