@@ -244,9 +244,12 @@ def _finalize_voice_delivery(
         return file_str, native and want_opus and file_str.endswith(".ogg")
     if not opted_in:
         return file_str, False
-    # Plugin-registered provider (issue #30398). Voice-bubble delivery opts in via
-    # ``TTSProvider.voice_compatible`` (mirrors the command-provider opt-in). Plugins that already write
-    # Opus skip the ffmpeg conversion.
+    # Plugin/command provider (issue #30398). Opus conversion exists for platforms that REQUIRE
+    # Ogg/Opus for a voice bubble; elsewhere (iMessage/photon, Slack, Discord) the container the
+    # provider wrote already plays, and re-wrapping AAC/MP3 as Opus yields a bubble those clients
+    # cannot decode. Same ``want_opus`` gate the built-in branch above uses.
+    if not want_opus:
+        return file_str, True
     if not file_str.endswith(".ogg"):
         file_str = _convert_to_opus(file_str) or file_str
     return file_str, file_str.endswith(".ogg")
