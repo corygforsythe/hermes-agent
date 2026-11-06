@@ -10,8 +10,9 @@ captain's VPS ran, and the image the k3s cluster deploys
   `.github/workflows/vps-image.yml`.
 - `.github/workflows/vps-image.yml` builds on every push to `vps-patches`:
   the repo-root `Dockerfile` unchanged, then `vps/Dockerfile` on top (the GitHub
-  CLI, Pocket TTS on CPU torch at the VPS's versions from
-  `pocket-tts-requirements.txt`, and `pocket-tts-hermes.sh`). It pushes
+  CLI, Docker's static CLI in place of Debian's `docker-cli`, Pocket TTS on CPU
+  torch at the VPS's versions from `pocket-tts-requirements.txt`, and
+  `pocket-tts-hermes.sh`). It pushes
   `ghcr.io/corygforsythe/hermes-agent:<full commit SHA>` and `:vps-patches`.
   Argo CD Image Updater picks up the SHA tag.
 - To move to a newer upstream: rebase this branch onto it, drop any patch that
